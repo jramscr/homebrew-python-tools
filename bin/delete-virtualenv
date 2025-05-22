@@ -1,0 +1,10 @@
+#!/bin/bash
+
+ENV_DIR=${1:-venv}
+
+if [ -d "$ENV_DIR" ]; then
+    rm -rf "$ENV_DIR"
+    echo "Deleted virtual environment at $ENV_DIR"
+else
+    echo "No virtual environment found at $ENV_DIR"
+fi

@@ -1,0 +1,22 @@
+#!/bin/bash
+
+ENV_DIR=${1:-venv}
+
+# Create virtualenv
+python3 -m venv "$ENV_DIR"
+
+# Create requirements.txt if not exists
+if [ ! -f "requirements.txt" ]; then
+    echo "# Add your dependencies here" > requirements.txt
+fi
+
+# Optional: create pyproject.toml instead
+if [[ "$2" == "--poetry" ]]; then
+    if ! command -v poetry &> /dev/null; then
+        echo "Poetry not installed. Install it first."
+        exit 1
+    fi
+    poetry init --no-interaction
+fi
+
+echo "Virtual environment created at $ENV_DIR"
