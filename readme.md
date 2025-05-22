@@ -57,3 +57,8 @@ Contributions are welcome! Please open issues or submit pull requests for improv
 ## License
 
 See [LICENSE](LICENSE) for details.
+
+## Calculate Checksum
+```
+curl -L -o vX.X.X.tar.gz https://github.com/jramscr/homebrew-python-tools/archive/refs/tags/vX.X.X.tar.gz shasum -a 256 vX.X.X.tar.gz
+```
