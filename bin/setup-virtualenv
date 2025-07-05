@@ -1,22 +1,515 @@
 #!/bin/bash
 
-ENV_DIR=${1:-venv}
+# Centralized virtual environment management
+# Main command that infers environment details from project configuration
+# Reads .python-version and pyproject.toml to determine environment setup
 
-# Create virtualenv
-python3 -m venv "$ENV_DIR"
+set -e
 
-# Create requirements.txt if not exists
-if [ ! -f "requirements.txt" ]; then
-    echo "# Add your dependencies here" > requirements.txt
-fi
+# Configuration
+USER_HOME="$HOME"
+ENV_BASE_DIR="$USER_HOME/setup-virtualenv"
+ENVS_DIR="$ENV_BASE_DIR/envs"
+DEPS_DIR="$ENV_BASE_DIR/dependencies"
+PROJECT_DIR="$(pwd)"
 
-# Optional: create pyproject.toml instead
-if [[ "$2" == "--poetry" ]]; then
-    if ! command -v poetry &> /dev/null; then
-        echo "Poetry not installed. Install it first."
+# Colors for output
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+BLUE='\033[0;34m'
+NC='\033[0m' # No Color
+
+# Helper functions
+log_info() {
+    echo -e "${BLUE}[INFO]${NC} $1"
+}
+
+log_success() {
+    echo -e "${GREEN}[SUCCESS]${NC} $1"
+}
+
+log_warning() {
+    echo -e "${YELLOW}[WARNING]${NC} $1"
+}
+
+log_error() {
+    echo -e "${RED}[ERROR]${NC} $1"
+}
+
+# Show usage
+show_usage() {
+    cat << EOF
+Usage: setup-virtualenv [OPTIONS]
+
+Main command for centralized virtual environment management.
+Infers environment details from project configuration files.
+
+Options:
+    --list                    List all environments
+    --use <env_name>          Activate a specific environment
+    --delete <env_name>       Delete an environment
+    --sync                    Force sync dependencies from pyproject.toml
+    --validate                Validate current environment is up-to-date
+    -h, --help                Show this help
+
+Configuration Files:
+    .python-version           Specifies Python version (e.g., "3.9", "3.10.2")
+    pyproject.toml           Defines project dependencies
+
+Examples:
+    setup-virtualenv                    # Create/activate environment for current project
+    setup-virtualenv --list             # List all environments
+    setup-virtualenv --use my-project_python3.9
+    setup-virtualenv --delete my-project_python3.9
+    setup-virtualenv --sync             # Force sync dependencies
+    setup-virtualenv --validate         # Check if environment is up-to-date
+
+Workflow:
+    1. Create project directory
+    2. Create .python-version and pyproject.toml files
+    3. Run setup-virtualenv (infers everything automatically)
+EOF
+}
+
+# Initialize directory structure
+init_directories() {
+    mkdir -p "$ENVS_DIR"
+    mkdir -p "$DEPS_DIR"
+}
+
+# Get project name from current directory
+get_project_name() {
+    basename "$(pwd)"
+}
+
+# Read Python version from .python-version file
+get_python_version() {
+    local python_version_file="$PROJECT_DIR/.python-version"
+    
+    if [ ! -f "$python_version_file" ]; then
+        log_warning "No .python-version file found. Creating with default Python version..."
+        echo "3.9" > "$python_version_file"
+        log_success "Created .python-version with Python 3.9"
+    fi
+    
+    cat "$python_version_file" | tr -d '[:space:]'
+}
+
+# Create environment name
+create_env_name() {
+    local project_name="$1"
+    local python_ver="$2"
+    
+    # Normalize Python version (remove patch version for consistency)
+    local major_minor=$(echo "$python_ver" | cut -d'.' -f1,2)
+    echo "${project_name}_python${major_minor}"
+}
+
+# Check if pyproject.toml exists and create if needed
+check_pyproject() {
+    local pyproject_path="$PROJECT_DIR/pyproject.toml"
+    
+    if [ ! -f "$pyproject_path" ]; then
+        log_warning "No pyproject.toml found. Creating basic pyproject.toml..."
+        
+        local project_name=$(get_project_name)
+        cat > "$pyproject_path" << EOF
+[build-system]
+requires = ["setuptools>=61.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "$project_name"
+version = "0.1.0"
+description = "A sample project"
+authors = [{name = "Your Name", email = "your.email@example.com"}]
+dependencies = [
+    # Add your production dependencies here
+    # "requests>=2.28.0",
+    # "pandas>=1.5.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    # Add your development dependencies here
+    # "pytest>=7.0.0",
+    # "black>=22.0.0",
+    # "flake8>=5.0.0",
+]
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+"*" = ["*.txt", "*.md", "*.yml", "*.yaml"]
+EOF
+        
+        log_success "Created pyproject.toml in $PROJECT_DIR"
+    fi
+}
+
+# List all environments
+list_environments() {
+    if [ ! -d "$ENVS_DIR" ] || [ -z "$(ls -A "$ENVS_DIR" 2>/dev/null)" ]; then
+        log_info "No environments found."
+        return
+    fi
+    
+    log_info "Available environments:"
+    echo ""
+    
+    for env_dir in "$ENVS_DIR"/*; do
+        if [ -d "$env_dir" ]; then
+            env_name=$(basename "$env_dir")
+            if [ -f "$env_dir/bin/activate" ]; then
+                echo -e "  ${GREEN}✓${NC} $env_name"
+            else
+                echo -e "  ${RED}✗${NC} $env_name (incomplete)"
+            fi
+        fi
+    done
+    
+    echo ""
+    log_info "To activate an environment, use: setup-virtualenv --use <env_name>"
+}
+
+# Sync dependencies from pyproject.toml
+sync_dependencies() {
+    local env_name="$1"
+    local deps_path="$DEPS_DIR/$env_name"
+    local env_path="$ENVS_DIR/$env_name"
+    local pyproject_path="$PROJECT_DIR/pyproject.toml"
+    
+    if [ ! -f "$pyproject_path" ]; then
+        log_error "pyproject.toml not found in $PROJECT_DIR"
         exit 1
     fi
-    poetry init --no-interaction
-fi
+    
+    log_info "Syncing dependencies from pyproject.toml for '$env_name'..."
+    
+    # Activate environment
+    source "$env_path/bin/activate"
+    
+    # Install build tools if not present
+    pip install --upgrade pip setuptools wheel
+    
+    # Extract dependencies from pyproject.toml
+    log_info "Extracting dependencies from pyproject.toml..."
+    
+    # Create a temporary script to extract dependencies
+    local temp_script=$(mktemp)
+    cat > "$temp_script" << 'EOF'
+import tomllib
+import sys
 
-echo "Virtual environment created at $ENV_DIR"
+try:
+    with open(sys.argv[1], 'rb') as f:
+        data = tomllib.load(f)
+    
+    project = data.get('project', {})
+    dependencies = project.get('dependencies', [])
+    optional_deps = project.get('optional-dependencies', {})
+    
+    # Write production dependencies
+    with open(sys.argv[2], 'w') as f:
+        for dep in dependencies:
+            f.write(f"{dep}\n")
+    
+    # Write development dependencies
+    with open(sys.argv[3], 'w') as f:
+        f.write("# Development dependencies\n")
+        f.write("-r requirements.txt\n")
+        for group_name, deps in optional_deps.items():
+            f.write(f"\n# {group_name} dependencies\n")
+            for dep in deps:
+                f.write(f"{dep}\n")
+    
+    print("Dependencies extracted successfully")
+    
+except Exception as e:
+    print(f"Error: {e}")
+    sys.exit(1)
+EOF
+    
+    # Run the extraction script
+    if python3 "$temp_script" "$pyproject_path" "$deps_path/requirements.txt" "$deps_path/dev-requirements.txt"; then
+        log_success "Dependencies synced successfully!"
+        log_info "Production dependencies: $deps_path/requirements.txt"
+        log_info "Development dependencies: $deps_path/dev-requirements.txt"
+    else
+        log_error "Failed to extract dependencies from pyproject.toml"
+        rm -f "$temp_script"
+        exit 1
+    fi
+    
+    rm -f "$temp_script"
+}
+
+# Install dependencies
+install_dependencies() {
+    local env_name="$1"
+    local deps_path="$DEPS_DIR/$env_name"
+    local env_path="$ENVS_DIR/$env_name"
+    
+    log_info "Installing dependencies for '$env_name'..."
+    
+    # Activate environment
+    source "$env_path/bin/activate"
+    
+    # Install production dependencies
+    if [ -f "$deps_path/requirements.txt" ]; then
+        log_info "Installing production dependencies..."
+        pip install -r "$deps_path/requirements.txt"
+    else
+        log_warning "No requirements.txt found. Run 'setup-virtualenv --sync' first."
+        return
+    fi
+    
+    # Install development dependencies
+    if [ -f "$deps_path/dev-requirements.txt" ]; then
+        log_info "Installing development dependencies..."
+        pip install -r "$deps_path/dev-requirements.txt"
+    else
+        log_warning "No dev-requirements.txt found."
+    fi
+    
+    log_success "Dependencies installed successfully!"
+}
+
+# Create virtual environment
+create_environment() {
+    local env_name="$1"
+    local python_ver="$2"
+    local env_path="$ENVS_DIR/$env_name"
+    local deps_path="$DEPS_DIR/$env_name"
+    
+    if [ -d "$env_path" ]; then
+        log_warning "Environment '$env_name' already exists."
+        read -p "Do you want to recreate it? [y/N]: " confirm
+        if [[ ! "$confirm" =~ ^[Yy]$ ]]; then
+            return
+        fi
+        rm -rf "$env_path"
+    fi
+    
+    log_info "Creating environment '$env_name' with Python $python_ver..."
+    
+    # Create environment
+    mkdir -p "$env_path"
+    mkdir -p "$deps_path"
+    
+    # Use appropriate Python version
+    if [[ "$python_ver" == "2.7" ]]; then
+        python_cmd="python2.7"
+    else
+        python_cmd="python${python_ver}"
+    fi
+    
+    # Create virtual environment
+    if command -v "$python_cmd" &>/dev/null; then
+        "$python_cmd" -m venv "$env_path"
+    else
+        log_error "Python $python_ver not found. Please install it first."
+        exit 1
+    fi
+    
+    # Create dependency files (will be populated by sync)
+    cat > "$deps_path/requirements.txt" << EOF
+# Production dependencies for $env_name
+# This file is auto-generated from pyproject.toml
+# Use 'setup-virtualenv --sync' to sync from pyproject.toml
+EOF
+    
+    cat > "$deps_path/dev-requirements.txt" << EOF
+# Development dependencies for $env_name
+# This file is auto-generated from pyproject.toml
+# Use 'setup-virtualenv --sync' to sync from pyproject.toml
+-r requirements.txt
+EOF
+    
+    log_success "Environment '$env_name' created successfully!"
+    log_info "Environment location: $env_path"
+    log_info "Dependencies location: $deps_path"
+}
+
+# Activate environment
+activate_environment() {
+    local env_name="$1"
+    local env_path="$ENVS_DIR/$env_name"
+    
+    if [ ! -d "$env_path" ]; then
+        log_error "Environment '$env_name' not found."
+        exit 1
+    fi
+    
+    if [ ! -f "$env_path/bin/activate" ]; then
+        log_error "Environment '$env_name' is incomplete or corrupted."
+        exit 1
+    fi
+    
+    log_info "Activating environment '$env_name'..."
+    
+    # Source the activation script
+    source "$env_path/bin/activate"
+    
+    # Update PS1 to show environment name
+    export PS1="($env_name) $PS1"
+    
+    log_success "Environment '$env_name' activated!"
+    log_info "To deactivate, run: deactivate"
+}
+
+# Delete environment
+delete_environment() {
+    local env_name="$1"
+    local env_path="$ENVS_DIR/$env_name"
+    local deps_path="$DEPS_DIR/$env_name"
+    
+    if [ ! -d "$env_path" ]; then
+        log_error "Environment '$env_name' not found."
+        exit 1
+    fi
+    
+    log_warning "This will permanently delete environment '$env_name' and its dependencies."
+    read -p "Are you sure? [y/N]: " confirm
+    if [[ ! "$confirm" =~ ^[Yy]$ ]]; then
+        log_info "Deletion cancelled."
+        return
+    fi
+    
+    rm -rf "$env_path"
+    rm -rf "$deps_path"
+    
+    log_success "Environment '$env_name' deleted successfully!"
+}
+
+# Validate environment is up-to-date
+validate_environment() {
+    local env_name="$1"
+    local env_path="$ENVS_DIR/$env_name"
+    local deps_path="$DEPS_DIR/$env_name"
+    local pyproject_path="$PROJECT_DIR/pyproject.toml"
+    
+    if [ ! -d "$env_path" ]; then
+        log_error "Environment '$env_name' not found."
+        return 1
+    fi
+    
+    if [ ! -f "$pyproject_path" ]; then
+        log_error "pyproject.toml not found in $PROJECT_DIR"
+        return 1
+    fi
+    
+    log_info "Validating environment '$env_name'..."
+    
+    # Check if dependencies need syncing
+    if [ ! -f "$deps_path/requirements.txt" ] || [ ! -f "$deps_path/dev-requirements.txt" ]; then
+        log_warning "Dependencies not synced. Running sync..."
+        sync_dependencies "$env_name"
+        install_dependencies "$env_name"
+        return 0
+    fi
+    
+    # Simple validation - could be enhanced with more sophisticated checks
+    log_info "Environment appears to be up-to-date."
+    log_info "Run 'setup-virtualenv --sync' to force sync dependencies if needed."
+    
+    return 0
+}
+
+# Main workflow - infer everything from project configuration
+main_workflow() {
+    local project_name=$(get_project_name)
+    local python_ver=$(get_python_version)
+    local env_name=$(create_env_name "$project_name" "$python_ver")
+    local env_path="$ENVS_DIR/$env_name"
+    
+    log_info "Project: $project_name"
+    log_info "Python version: $python_ver"
+    log_info "Environment: $env_name"
+    
+    # Check/create pyproject.toml
+    check_pyproject
+    
+    # Initialize directories
+    init_directories
+    
+    # Create environment if it doesn't exist
+    if [ ! -d "$env_path" ]; then
+        log_info "Environment doesn't exist. Creating..."
+        create_environment "$env_name" "$python_ver"
+    else
+        log_info "Environment exists. Validating..."
+        validate_environment "$env_name"
+    fi
+    
+    # Sync and install dependencies
+    log_info "Syncing dependencies..."
+    sync_dependencies "$env_name"
+    install_dependencies "$env_name"
+    
+    # Activate environment
+    activate_environment "$env_name"
+}
+
+# Main script logic
+main() {
+    # Parse command line arguments
+    while [[ $# -gt 0 ]]; do
+        case $1 in
+            --list)
+                init_directories
+                list_environments
+                exit 0
+                ;;
+            --use)
+                init_directories
+                activate_environment "$2"
+                exit 0
+                ;;
+            --delete)
+                init_directories
+                delete_environment "$2"
+                exit 0
+                ;;
+            --sync)
+                local project_name=$(get_project_name)
+                local python_ver=$(get_python_version)
+                local env_name=$(create_env_name "$project_name" "$python_ver")
+                init_directories
+                sync_dependencies "$env_name"
+                install_dependencies "$env_name"
+                exit 0
+                ;;
+            --validate)
+                local project_name=$(get_project_name)
+                local python_ver=$(get_python_version)
+                local env_name=$(create_env_name "$project_name" "$python_ver")
+                init_directories
+                validate_environment "$env_name"
+                exit 0
+                ;;
+            -h|--help)
+                show_usage
+                exit 0
+                ;;
+            -*)
+                log_error "Unknown option: $1"
+                show_usage
+                exit 1
+                ;;
+            *)
+                log_error "Unexpected argument: $1"
+                show_usage
+                exit 1
+                ;;
+        esac
+    done
+    
+    # No arguments - run main workflow
+    main_workflow
+}
+
+# Run main function with all arguments
+main "$@"

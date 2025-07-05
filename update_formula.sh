@@ -2,12 +2,16 @@
 
 set -e
 
-# === 📦 Load .env ===
+# === 📦 Load .env or use defaults ===
 if [ -f ".env" ]; then
   export $(grep -v '^#' .env | xargs)
 else
-  echo "❌ .env file not found!"
-  exit 1
+  echo "⚠️  .env file not found! Using defaults..."
+  # Set default values
+  export GITHUB_USER="jramscr"
+  export REPO_NAME="homebrew-python-tools"
+  export FORMULA_PATH="Formula/setup_virtualenv.rb"
+  export DEFAULT_BRANCH="main"
 fi
 
 # === 🏷️ Get tag and message ===
@@ -30,7 +34,15 @@ fi
 
 # === 📦 Tarball URL + SHA256 ===
 TARBALL_URL="https://github.com/$GITHUB_USER/$REPO_NAME/archive/refs/tags/$TAG.tar.gz"
+echo "🔍 Calculating SHA256 for $TARBALL_URL..."
 SHA256=$(curl -Ls "$TARBALL_URL" | shasum -a 256 | awk '{print $1}')
+
+if [ -z "$SHA256" ]; then
+  echo "❌ Failed to calculate SHA256. Check if the tag exists on GitHub."
+  exit 1
+fi
+
+echo "✅ SHA256: $SHA256"
 
 # === 📂 Update formula ===
 if [ ! -f "$FORMULA_PATH" ]; then
