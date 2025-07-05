@@ -104,18 +104,18 @@ check_tag_exists() {
 # Update version in files
 update_version_in_formula() {
     local version="$1"
-    log_info "Updating version in Formula/setup_virtualenv.rb..."
-    sed -i.bak -e "s|^  version \".*\"|  version \"$version\"|" Formula/setup_virtualenv.rb
-    rm Formula/setup_virtualenv.rb.bak
-    log_success "Updated version in Formula/setup_virtualenv.rb"
+    log_info "Updating version in Formula/setup-virtualenv.rb..."
+    sed -i.bak -e "s|^  version \".*\"|  version \"$version\"|" Formula/setup-virtualenv.rb
+    rm Formula/setup-virtualenv.rb.bak
+    log_success "Updated version in Formula/setup-virtualenv.rb"
 }
 
 update_sha256_in_formula() {
     local sha256="$1"
-    log_info "Updating sha256 in Formula/setup_virtualenv.rb..."
-    sed -i.bak -e "s|^  sha256 \".*\"|  sha256 \"$sha256\"|" Formula/setup_virtualenv.rb
-    rm Formula/setup_virtualenv.rb.bak
-    log_success "Updated sha256 in Formula/setup_virtualenv.rb"
+    log_info "Updating sha256 in Formula/setup-virtualenv.rb..."
+    sed -i.bak -e "s|^  sha256 \".*\"|  sha256 \"$sha256\"|" Formula/setup-virtualenv.rb
+    rm Formula/setup-virtualenv.rb.bak
+    log_success "Updated sha256 in Formula/setup-virtualenv.rb"
 }
 
 # Main deployment function
@@ -124,7 +124,7 @@ deploy() {
     local message="$2"
     local auto_confirm="$3"
     local tag="v$version"
-    local formula_file="Formula/setup_virtualenv.rb"
+    local formula_file="Formula/setup-virtualenv.rb"
     local tarball_url="https://github.com/jramscr/homebrew-python-tools/archive/refs/tags/v${version}.tar.gz"
     
     log_info "Starting deployment for version $version"
