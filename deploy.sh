@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # Deploy script for homebrew-python-tools
-# Orchestrates the entire deployment process
+# Automates version bump, tag, SHA256 update, and pushes
 
 set -e
 
@@ -34,29 +34,28 @@ show_usage() {
     cat << EOF
 Usage: deploy.sh [OPTIONS] <version>
 
-Deploy a new version of the homebrew-python-tools formula.
+Automate Homebrew formula deployment:
+- Bump version in formula
+- Commit and tag
+- Push tag
+- Calculate SHA256
+- Update formula with SHA256
+- Commit and push
 
 Options:
     -m, --message <message>    Release message (optional)
     -y, --yes                  Skip confirmation prompts
     -h, --help                 Show this help
 
-Examples:
-    deploy.sh 1.1.0
-    deploy.sh 1.1.0 -m "Add centralized environment management"
-    deploy.sh 1.1.0 --yes
-
-This script will:
-1. Update the formula version and SHA256
-2. Create a git tag
-3. Push changes and tags to GitHub
+Example:
+    ./deploy.sh 1.1.0 -m "Release v1.1.0" --yes
 EOF
 }
 
 # Check if we're in a git repository
 check_git_repo() {
     if [ ! -d ".git" ]; then
-        log_error "Not in a git repository. Please run this from the project root."
+        log_error "Not in a git repository. Please run from project root."
         exit 1
     fi
 }
@@ -66,9 +65,17 @@ check_uncommitted_changes() {
     if [ -n "$(git status --porcelain)" ]; then
         log_warning "There are uncommitted changes:"
         git status --short
-        read -p "Continue anyway? [y/N]: " confirm
-        if [[ ! "$confirm" =~ ^[Yy]$ ]]; then
-            log_info "Deployment cancelled."
+        read -p "Uncommitted changes detected. Commit them before deploying? [y/N]: " confirm
+        if [[ "$confirm" =~ ^[Yy]$ ]]; then
+            read -p "Enter commit message (leave blank for 'WIP commit before deploy'): " commit_msg
+            if [ -z "$commit_msg" ]; then
+                commit_msg="WIP commit before deploy"
+            fi
+            git add .
+            git commit -m "$commit_msg"
+            log_success "Committed changes: $commit_msg"
+        else
+            log_info "Deployment cancelled due to uncommitted changes."
             exit 0
         fi
     fi
@@ -95,25 +102,20 @@ check_tag_exists() {
 }
 
 # Update version in files
-update_version_files() {
+update_version_in_formula() {
     local version="$1"
-    
-    log_info "Updating version in files..."
-    
-    # Update Formula/setup_virtualenv.rb
-    if [ -f "Formula/setup_virtualenv.rb" ]; then
-        sed -i.bak \
-            -e "s|^  version \".*\"|  version \"$version\"|" \
-            "Formula/setup_virtualenv.rb"
-        rm "Formula/setup_virtualenv.rb.bak"
-        log_success "Updated Formula/setup_virtualenv.rb"
-    fi
-    
-    # Update README if it contains version references
-    if [ -f "readme.md" ]; then
-        # This is optional - only if README contains specific version references
-        log_info "README version references updated (if any)"
-    fi
+    log_info "Updating version in Formula/setup_virtualenv.rb..."
+    sed -i.bak -e "s|^  version \".*\"|  version \"$version\"|" Formula/setup_virtualenv.rb
+    rm Formula/setup_virtualenv.rb.bak
+    log_success "Updated version in Formula/setup_virtualenv.rb"
+}
+
+update_sha256_in_formula() {
+    local sha256="$1"
+    log_info "Updating sha256 in Formula/setup_virtualenv.rb..."
+    sed -i.bak -e "s|^  sha256 \".*\"|  sha256 \"$sha256\"|" Formula/setup_virtualenv.rb
+    rm Formula/setup_virtualenv.rb.bak
+    log_success "Updated sha256 in Formula/setup_virtualenv.rb"
 }
 
 # Main deployment function
@@ -122,6 +124,8 @@ deploy() {
     local message="$2"
     local auto_confirm="$3"
     local tag="v$version"
+    local formula_file="Formula/setup_virtualenv.rb"
+    local tarball_url="https://github.com/jramscr/homebrew-python-tools/archive/refs/tags/v${version}.tar.gz"
     
     log_info "Starting deployment for version $version"
     
@@ -132,11 +136,11 @@ deploy() {
     check_tag_exists "$version"
     
     # Update version in files
-    update_version_files "$version"
+    update_version_in_formula "$version"
     
     # Commit version changes
     log_info "Committing version changes..."
-    git add .
+    git add "$formula_file"
     git commit -m "Bump version to $version"
     
     # Create tag
@@ -147,31 +151,35 @@ deploy() {
         git tag -a "$tag" -m "Release version $version"
     fi
     
-    # Run update_formula.sh
-    log_info "Running update_formula.sh..."
-    if [ "$auto_confirm" = "true" ]; then
-        # Create a temporary script to auto-confirm
-        echo "y" | ./update_formula.sh "$tag" "$message" 2>/dev/null || true
-    else
-        ./update_formula.sh "$tag" "$message"
-    fi
-    
     # Push changes and tags
     log_info "Pushing changes and tags..."
     if [ "$auto_confirm" = "true" ]; then
-        ./push_changes_and_tags.sh
+        git push origin main
+        git push origin "$tag"
     else
         read -p "Push changes and tags to GitHub? [y/N]: " confirm
         if [[ "$confirm" =~ ^[Yy]$ ]]; then
-            ./push_changes_and_tags.sh
+            git push origin main
+            git push origin "$tag"
         else
             log_warning "Skipped pushing to GitHub."
         fi
     fi
     
-    log_success "Deployment completed successfully!"
-    log_info "Version $version has been deployed."
-    log_info "Tag: $tag"
+    # Step 2: Download tarball and calculate SHA256
+    log_info "Downloading tarball for SHA256 calculation..."
+    curl -L -o v${version}.tar.gz "$tarball_url"
+    sha256=$(shasum -a 256 v${version}.tar.gz | awk '{print $1}')
+    log_info "SHA256: $sha256"
+    rm v${version}.tar.gz
+    
+    # Step 3: Update sha256 in formula, commit, push
+    update_sha256_in_formula "$sha256"
+    git add "$formula_file"
+    git commit -m "Update sha256 for v$version"
+    git push origin main
+    
+    log_success "Deployment completed! Version $version is live."
 }
 
 # Parse command line arguments
